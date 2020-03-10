@@ -1,0 +1,1074 @@
+########################################################################
+########################################################################
+##
+## ESERCIZIO SUGLI RDD (RESILIENT DISTRIBUTED DATASET)
+##
+########################################################################
+########################################################################
+
+
+########################
+# OPERAZIONI PRELIMINARI
+########################
+
+# CARICHIAMO UN FILE DI TESTO DI ESEMPIO IN "/tmp/corsospark" SIA SU HDFS CHE SU FILESYSTEM LOCALE
+mkdir /tmp/corsospark
+hdfs dfs -mkdir /tmp/corsospark
+hdfs dfs -put example_rdd.txt /tmp/corsospark
+cp example_rdd.txt /tmp/corsospark
+
+
+
+########################
+# LANCIAMO ORA LA SPARK CLI
+# E FACCIAMO QUALCHE TEST CON GLI RDD
+# RESILIENT DISTRIBUTED DATASET
+########################
+
+# PARALLELIZZIAMO UN RDD USANDO LO SPARK CONTEXT
+integer_RDD = sc.parallelize(range(10), 3)
+ 
+# CONTROLLIAMO LE RDD PARTITIONS
+# IN QUESTO CASO ACCORPIAMO TUTTI I DATI DELLE PARTIZIONI RDD SUL DRIVER
+integer_RDD.collect()
+
+# CONTROLLIAMO LE RDD PARTITIONS
+# IN QUESTO CASO MANTENIAMO GLI SPLIT DELLE PARTIZIONI CREATE DALLA PARALLELIZZAZIONE
+integer_RDD.glom().collect()
+
+# PROVIAMO A LEGGERE UN TEXT FILE DAL LOCAL FILESYSTEM
+text_RDD = sc.textFile("file:///tmp/corsospark/example_rdd.txt")
+
+# PROVIAMO A MOSTRARE LA PRIMA RIGA DEL FILE CHE ABBIAMO TENTATO DI CARICARE
+# IL COMANDO CON OGNI PROBABILITA' FALLIRA' PERCHE' NON SAPPIAMO SU QUALE NODO
+# STA GIRANDO IL CONTAINER DEL NOSTRO WORKER! E' IMPORTANTE RICORDARE CHE MOLTO
+# SPESSO QUANDO SI OTTENGONO ERRORI FACENDO RIFERIMENTO A RISORSE LOCALI SI
+# PUO' RISPARMIARE MOLTO TEMPO DI DEBUGGING TENTANDO DI IMMAGINARE SE STIAMO
+# RICADENDO IN QUESTO CASO. AD ESEMPIO, SE IL NOSTRO PROGRAMMA STA FACENDO
+# USO DI UNA LIBRERIA PYTHON NON DI USO COMUNE, PUO' ESSERE PROBABILE CHE
+# IL PROBLEMA SIA CHE LA LIBRERIA STESSA NON SIA STATA INSTALLATA SU *** TUTTI ***
+# I NODI DEL CLUSTER CON "pip install". MAGARI CI SI E' DIMENTICATI DI INSTALLARLA
+# SU UN SOLO NODO, E IL 90% DELLE VOLTE IL PROGRAMMA GIRA CON SUCCESSO PERCHE'
+# NON VENGONO DISTRIBUITI WORKER CONTAINER SU QUEL NODO. MA QUANDO ACCADE
+# OTTENIAMO DELLE ECCEZIONI E MAGARRI NON CAPIAMO IL PERCHE'
+text_RDD.take(1)
+
+# RIPROVIAMO CON IL FILE CHE AVEVAMO PRECEDENTEMENTE CARICATO IN HDFS:
+text_RDD = sc.textFile("hdfs:///tmp/corsospark/example_rdd.txt")
+
+# QUESTA VOLTA RIUSCIREMO A VISUALIZZARE IL CONTENUTO DEL FILE!
+text_RDD.take(1)
+
+
+
+########################
+# UNA PRIMA SEMPLICE APPLICAZIONE DEGLI RDD IN MAPREDUCE: WORD COUNT
+########################
+
+# PARTE DI MAP
+##############
+
+# DEFINIAMO DUE HELPER FUNCTIONS
+def split_words(line):
+	return line.split()
+
+def create_pair(word):
+	return (word, 1)
+
+# ESTRAIAMO DELLE KEY VALUE USANDO MAPREDUCE
+# AFFIANCANDO AD OGNI PARLOA (KEY) UN VALURE (VALUE)
+# CHE NEL NOSTRO CASO SARA' "1"
+# USEREMO POI QUESTO VALORE PER TOTALIZZARE IL NUMERO DI PAROLE IN UN TESTO
+pairs_RDD = text_RDD.flatMap(split_words).map(create_pair)
+
+# ESEGUIAMO FISICAMENTE LA RACCOLTA DEI DATI TRAMITE UNA ACTION
+# DI "collect" CHE ESEGUE IL GRAFO DI ESECUZIONE DEI COMANDI MAP
+# CHE ABBIAMO IMPOSTATO COME PIPELINE
+pairs_RDD.collect()
+
+# PARTE DI REDUCE
+#################
+
+# DEFINIAMO UNA ULTERIORE HELPER FUNCTION
+def sum_counts(a, b):
+	return a + b
+
+# A PARITA' DI CHIAVE (PAROLA) FACCIAMO REDUCE
+# DEI VALORI (PER OGNI PARLOA E' UN "1" CHE SO SOMMA)
+# USANDO LA NOSTRA HELPER FUNCTION CHE LAVORA SU TUPLE DI DUE
+wordcounts_RDD = pairs_RDD.reduceByKey(sum_counts)
+
+# ESEGUIAMO LA ACTION DI COLLECT, ESEGUIAMO L'EXECUTION GRAPH E VERIFICHIAMO
+# L'AVVENUTA TOTALIZZAZIONE A PARITA' DI PAROLA. IN QUESTO CASO, E' SOLO
+# LA PAROLA "far" CHE VIENE CONTEGGIATA DUE VOLTE. QUESTO E' CORRETTO
+# PERCHE' AD ESEMPIO "A" ED "a" SONO DIVERSE A CAUSA DELLA CASE SENSITIVITY
+# E LA RIMANENZA DELLE PAROLE E' COSTITUITA DA ELEMENTI UNICI
+wordcounts_RDD.collect()
+
+
+
+
+
+
+########################################################################
+########################################################################
+##
+## ESERCIZIO SUI DATAFRAMES
+##
+########################################################################
+########################################################################
+
+
+########################
+# OPERAZIONI PRELIMINARI
+########################
+
+# SU FILESYSTEM LOCALE, COME UTENTE "hdfs", CREIAMO UNA DIRECTORY DI LAVORO E COPIAMO
+# AL SUO INTERNO I FILES CSV DELLE TABELLE DI TEST
+mkdir corsospark
+cd corsospark
+
+# COPIARE IN "corsospark" I SEGUENTI FILE:
+categories.csv
+customers.csv
+employees.csv
+employee_territories.csv
+order_details.csv
+orders.csv
+products.csv
+regions.csv
+shippers.csv
+suppliers.csv
+territories.csv
+
+
+# ENTRIAMO IN HIVE E CREIAMO LE TABELLE DI ESEMPIO CHE ANDREMO AD USARE
+CREATE DATABASE spark;
+USE spark;
+
+CREATE TABLE IF NOT EXISTS categories (
+categoryID int,
+categoryName String,
+description String,
+picture String)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+LINES TERMINATED BY '\n'
+STORED AS TEXTFILE;
+
+CREATE TABLE IF NOT EXISTS customers (
+customerID String,
+companyName String,
+contactName String,
+contactTitle String,
+address	city String,
+region String,
+postalCode String,
+country String,
+phone String,
+fax String)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+LINES TERMINATED BY '\n'
+STORED AS TEXTFILE;
+
+CREATE TABLE IF NOT EXISTS employee_territories (
+employeeID String,
+territoryID String)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+LINES TERMINATED BY '\n'
+STORED AS TEXTFILE;
+
+CREATE TABLE IF NOT EXISTS employees (
+employeeID int,
+lastName String,
+firstName String,
+title String,
+titleOfCourtesy String,
+birthDate String,
+hireDate String,
+address String,
+city String,
+region String,
+postalCode String,
+country String,
+homePhone String,
+extension int,
+photo String,
+notes String,
+reportsTo int,
+photoPath String)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+LINES TERMINATED BY '\n'
+STORED AS TEXTFILE;
+
+CREATE TABLE IF NOT EXISTS order_details (
+orderID int,
+productID int,
+unitPrice Double,
+quantity int,
+discount Double)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+LINES TERMINATED BY '\n'
+STORED AS TEXTFILE;
+
+CREATE TABLE IF NOT EXISTS orders (
+orderID int,
+customerID String,
+employeeID int,
+orderDate String,
+requiredDate String,
+shippedDate String,
+shipVia int,
+freight Double,
+shipName String,
+shipAddress String,
+shipCity String,
+shipRegion String,
+shipPostalCode String,
+shipCountry String)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+LINES TERMINATED BY '\n'
+STORED AS TEXTFILE;
+
+CREATE TABLE IF NOT EXISTS products (
+productID int,
+productName String,
+supplierID int,
+categoryID int,
+quantityPerUnit String,
+unitPrice Double,
+unitsInStock int,
+unitsOnOrder int,
+reorderLevel int,
+discontinued int)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+LINES TERMINATED BY '\n'
+STORED AS TEXTFILE;
+
+CREATE TABLE IF NOT EXISTS regions (
+regionID int,
+regionDescription String)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+LINES TERMINATED BY '\n'
+STORED AS TEXTFILE;
+
+CREATE TABLE IF NOT EXISTS shippers (
+shipperID int,
+companyName String,
+phone String)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+LINES TERMINATED BY '\n'
+STORED AS TEXTFILE;
+
+CREATE TABLE IF NOT EXISTS suppliers (
+supplierID int,
+companyName String,
+contactName String,
+contactTitle String,
+address String,
+city String,
+region String,
+postalCode String,
+country String,
+phone String,
+fax String,
+homePage String)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+LINES TERMINATED BY '\n'
+STORED AS TEXTFILE;
+
+CREATE TABLE IF NOT EXISTS territories (
+territoryID int,
+territoryDescription String,
+regionID int)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+LINES TERMINATED BY '\n'
+STORED AS TEXTFILE;
+
+
+
+# VERIFICHIAMO LA CORRETTA CREAZIONE DELLE TABELLE
+show tables;
+
+
+
+# TORNIAMO AL PROMPT DI SISTEMA OPERATIVO E CARICHIAMO UN FILE
+# DI TESTO DI ESEMPIO IN "/tmp/corsospark" SU HDFS
+hdfs dfs -mkdir /tmp/corsospark
+
+hdfs dfs -put categories.csv /tmp/corsospark
+hdfs dfs -put customers.csv /tmp/corsospark
+hdfs dfs -put employee_territories.csv /tmp/corsospark
+hdfs dfs -put employees.csv /tmp/corsospark
+hdfs dfs -put order_details.csv /tmp/corsospark
+hdfs dfs -put orders.csv /tmp/corsospark
+hdfs dfs -put products.csv /tmp/corsospark
+hdfs dfs -put regions.csv /tmp/corsospark
+hdfs dfs -put shippers.csv /tmp/corsospark
+hdfs dfs -put suppliers.csv /tmp/corsospark
+hdfs dfs -put territories.csv /tmp/corsospark
+
+
+
+# TORNIAMO NELLA HIVE SHELL E POPOLIAMO LA TABELLA "employee" CON
+# I DATI PRESENTI NEL FILE DI ESEMPIO
+LOAD DATA INPATH 'hdfs:///tmp/corsospark/categories.csv'
+OVERWRITE INTO TABLE categories;
+
+LOAD DATA INPATH 'hdfs:///tmp/corsospark/customers.csv'
+OVERWRITE INTO TABLE customers;
+
+LOAD DATA INPATH 'hdfs:///tmp/corsospark/employee_territories.csv'
+OVERWRITE INTO TABLE employee_territories;
+
+LOAD DATA INPATH 'hdfs:///tmp/corsospark/employees.csv'
+OVERWRITE INTO TABLE employees;
+
+LOAD DATA INPATH 'hdfs:///tmp/corsospark/order_details.csv'
+OVERWRITE INTO TABLE order_details;
+
+LOAD DATA INPATH 'hdfs:///tmp/corsospark/orders.csv'
+OVERWRITE INTO TABLE orders;
+
+LOAD DATA INPATH 'hdfs:///tmp/corsospark/products.csv'
+OVERWRITE INTO TABLE products;
+
+LOAD DATA INPATH 'hdfs:///tmp/corsospark/regions.csv'
+OVERWRITE INTO TABLE regions;
+
+LOAD DATA INPATH 'hdfs:///tmp/corsospark/shippers.csv'
+OVERWRITE INTO TABLE shippers;
+
+LOAD DATA INPATH 'hdfs:///tmp/corsospark/suppliers.csv'
+OVERWRITE INTO TABLE suppliers;
+
+LOAD DATA INPATH 'hdfs:///tmp/corsospark/territories.csv'
+OVERWRITE INTO TABLE territories;
+
+
+# VERIFICHIAMO L'AVVENUTO CARICAMENTO
+select * from categories;
+
+select * from customers;
+
+select * from employee_territories;
+
+select * from employees;
+
+select * from order_details;
+
+select * from orders;
+
+select * from products;
+
+select * from regions;
+
+select * from shippers;
+
+select * from suppliers;
+
+select * from territories;
+
+
+########################
+# LANCIAMO ORA LA SPARK CLI
+# E FACCIAMO QUALCHE TEST CON
+# I DATAFRAMES
+########################
+
+# ENTRIAMO IN PYSPARK (CON DRIVER IPYTHON)
+PYSPARK_DRIVER_PYTHON=ipython pyspark \
+--executor-memory 2G \
+--executor-cores 2 \
+--num-executors 4 \
+--driver-memory 4G \
+--master=yarn
+
+
+# IMOPORTIAMO ALCUNE LIBRERIE
+# N.B. FARE COPIA/INCOLLA E ALLA FINE DARE DUE VOLTE INVIO
+# POICHE' STAMO USANDO IPYTHON
+import sys
+import getopt
+import unicodedata
+import datetime
+from pyspark.sql.functions import *
+from pyspark.sql.types import *
+
+
+# CREIAMO ALCUNI DATAFRAME A PARTIRE DALLE TABELLE HIVE APPENA CREATE
+categories_DF = sqlContext.table("spark.categories")
+customers_DF = sqlContext.table("spark.customers")
+employee_territories_DF = sqlContext.table("spark.employee_territories")
+employees_DF = sqlContext.table("spark.employees")
+order_details_DF = sqlContext.table("spark.order_details")
+orders_DF = sqlContext.table("spark.orders")
+products_DF = sqlContext.table("spark.products")
+regions_DF = sqlContext.table("spark.regions")
+shippers_DF = sqlContext.table("spark.shippers")
+suppliers_DF = sqlContext.table("spark.suppliers")
+territories_DF = sqlContext.table("spark.territories")
+
+
+# POSSIAMO VISUALIZZARE LO SCHEMA DI UN DATAFRAME
+orders_DF.printSchema()
+
+
+# POSSIAMO CONTARE I RECORDS IN UN DATAFRAME
+orders_DF.count()
+
+
+# VISUALIZZIAMO ALCUNI RECORD DI ESEMPIO DAI NOSTRI DATAFRAME
+employees_DF.show(5)
+orders_DF.show(5)
+
+
+# POSSIAMO CACHARE I NOSTRI DATAFRAME IN MODO CHE LE SUCCESSIVE ACTION
+# (COME PURE LE GENERICHE DML, O LE JOIN CON ATRE TABELLE) RISULTINO PIU' VELOCI
+orders_DF.cache()
+
+
+# DEFINIAMO UN FILTRO (EQUIVALENTE DELLA WHERE)
+# SENZA TRIGGERARE IMMEDIATAMENTE LA COLLECTION DEI RECORD
+# USIAMO UNA VARIABILE DI APPOGGIO PER FARE UN ESEMPIO PIO' VARIEGATO
+destination = 'France'
+
+orders_filered_DF = orders_DF \
+.filter("shipcountry = '" + destination + "'")
+
+orders_filered_DF.show()
+
+
+# POSSIAMO ANCHE ESEGUIRE TUTTA LA PIPELINE DEL COMANDO IN UNA SOLA VOLTA
+# SCATENANDO IMMEDIATAMENTE LA ACTION DI "show" O DI "collect" O DI "take"
+orders_DF \
+.filter("shipcountry = '" + destination + "'") \
+.show()
+
+
+# POSSIAMO ANCHE ESEGUIRE UNA AZIONE DI "collect" O DI "take" DI ALCUNI RECORDS
+# FARE UN TEST PER VEDERE LE DIFFERENZE (FONDAMENTALMENTE LA FORMATTAZIONE DELL'OUTPUT
+orders_DF \
+.filter("shipcountry = '" + destination + "'") \
+.collect()
+
+orders_DF \
+.filter("shipcountry = '" + destination + "'") \
+.take(5)
+
+
+# SI PUO' FARE ANCHE UN FILTRO PIU' COMPLESSO CON SINTASSI SQL-LIKE
+
+annoInizio = '1996'
+meseInizio = '07'
+annoFine = '1996'
+meseFine = '07'
+
+orders_DF \
+.filter("(substr(shippeddate,1,10) between ' " + annoInizio + "-" + meseInizio + "-01' \
+		and '" + annoFine + "-" + meseFine + "-31') \
+		and \
+		shipvia='2' ") \
+.show()
+
+# POSSIAMO ANCHE RENDERE L'ESEMPIO PIU' "PYTHONICO" E MENO "SQL LEGACY LIKE"
+orders_DF \
+.filter(orders_DF.shipcountry == destination) \
+.show()
+
+orders_DF \
+.filter( \
+		(orders_DF.shipcountry == destination) & \
+		(orders_DF.shippeddate.contains(annoInizio + '-' + meseInizio)) \
+		) \
+.show()
+
+orders_DF \
+.filter( \
+		(orders_DF.shipcountry == destination) & \
+		(orders_DF.shippeddate.like(annoInizio + '-' + meseInizio + '%')) \
+		) \
+.show()
+
+orders_DF \
+.filter( \
+		(orders_DF.shipcountry == destination) & \
+		(orders_DF.shippeddate.like(annoInizio + '-' + meseInizio + '%')) \
+		) \
+.show()
+
+
+# OPPURE ANCHE USANDO UNA LISTA COME RANGE DI RIFERIMENTO
+date_range = ['1996-07-01',  '1996-07-31']
+
+orders_DF \
+.filter( \
+		(orders_DF.shipcountry == destination) & \
+		(orders_DF.shippeddate.between(*date_range)) \
+		) \
+.show()
+
+
+# INVECE DI USARE LA LISTA POSSIAMO SPECIFICARE IL RANGE DI RIFERIMENTO ESPLICITAMENTE
+orders_DF \
+.filter( \
+		(orders_DF.shipcountry == destination) & \
+		(orders_DF.shippeddate.between('1996-07-01',  '1996-07-31')) \
+		) \
+.show()
+
+
+# A VOLTE E' UTILE REFERENZIARE LA COLONNA DIRETTAMENTE
+# IMPORTANTE: QUI CI SERVONO LE SQLFUNCTIONS, CHE ABBIAMO GIA'
+# IMPORTATO ALL'INIZIO, MA RIPETO LA IMPORT PER CHIAREZZA
+from pyspark.sql.functions import *
+
+orders_DF \
+.filter(col('shipcountry') == destination) \
+.filter(col('shippeddate').between('1996-07-01',  '1996-07-31')) \
+.show()
+
+orders_DF \
+.filter(col('shipcountry').isin(['Italy','France'])) \
+.filter(col('shippeddate').between('1996-07-01',  '1996-10-31')) \
+.show()
+
+list_of_countries = ['Italy','France']
+startDate = annoInizio +'-' + meseInizio + '01'
+endDate = '1996-08-31'
+
+orders_DF \
+.filter(col('shipcountry').isin(list_of_countries)) \
+.filter(col('shippeddate').between(startDate,  endDate)) \
+.show()
+
+
+# SI PUO' USARE UNA CLAUSOLA WHERE IN MODO PIU' "PYTHONICO"
+orders_DF \
+.where(col('shipcountry').isin(['Italy','France']) & \
+		(col('shippeddate').between('1996-07-01',  '1996-10-31'))) \
+.show()
+
+orders_DF \
+.where(col('shipregion').isNotNull() & \
+		(col('shippeddate').between('1996-07-01',  '1996-10-31'))) \
+.show()
+
+orders_DF \
+.where(col('shipregion').isNull() & \
+		(col('shippeddate').between('1996-07-01',  '1996-10-31'))) \
+.show()
+
+
+# NEGAZIONE (NOT)
+orders_DF \
+.where(~ (col('shipregion').isNull()) & \
+		(col('shippeddate').between('1996-07-01',  '1996-10-31'))) \
+.show()
+
+orders_DF \
+.where(~ (col('shipregion') == 'NULL') & \
+		(col('shippeddate').between('1996-07-01',  '1996-10-31')) | \
+		(col('shippeddate') == '1996-10-15')) \
+.show()
+
+
+# NON DIMENTICHIAMOCI PERO' CHE COME SPIEGATO ALL'INIZIO POSSIAMO FARE LE COSE PIU' FACILI
+orders_DF \
+.where("shipcountry = '" + destination + "' AND shippeddate between '1996-07-01' AND '1996-07-31'") \
+.show()
+
+orders_DF \
+.where("shipcountry = '" + destination + "' AND shippeddate like '1996%'") \
+.show()
+
+orders_DF \
+.where("shipcountry = '" + destination + "' AND shippeddate ='1996-11-28 00:00:00.000'") \
+.show()
+
+
+# POSSIAMO ORA AGGIUNGERE ALLA NOSTRA PIPELINE DI COMANDI UNA SELECT SOLO
+# DI ALCUNI CAMPI
+orders_DF \
+.where(col('shippeddate').between('1996-07-01',  '1996-10-31')) \
+.select(['orderid','customerid', 'shippeddate', 'shipvia', 'shipcity', 'shipcountry']) \
+.show()
+
+
+# PROVIAMO A CONTARE I RECORDS DEL NOSTRO DATAFRAME DI ORDINI FILTRATI
+orders_filered_DF.count()
+
+
+# ESCE UN ERRORE! PERCHE'? PERCHE' "show" NON ASSEGNA ALCUN RECORD ALL'OGGETTO A SINISTRA
+# BENSI' VISUALIZZA SOLTANTO! PROVIAMO INVECE A FARE UN ASSEGNAMENTO NEL MODO CORRETTO
+# OVVERO SENZA LA "show" E SUCCESSIVAMENTE RIPROVIAMO A FARE LA COUNT
+orders_filered_DF = orders_DF \
+.where(col('shippeddate').between('1996-07-01',  '1996-10-31')) \
+.select(['orderid','customerid', 'shippeddate', 'freight', 'shipvia', 'shipcity', 'shipcountry'])
+
+# RIPROVIAMO LA COUNT, CHE STAVOLTA FUNZIONERA'
+orders_filered_DF.count()
+
+
+# ORA POSSIAMO VERIFICARE CHE IL DATAFRAME ORIGINALE CONTINUA A CONTENERE LO
+# STESSO NUMERO DI RECORDS DELLA TABELLA ORIGINALE. SONO DUE OGGETTO DISTINTI
+# CHE CONTINUANO A VIVERE DI VITA PROPRIA. LI POTREMO RIUSARE SEPARATAMENTE
+# A VALLE NEL NOSTRO PROGRAMMA, E UN OGGETTO NON INTERFERIRA' CON L'ALTRO
+orders_DF.count()
+
+
+# POSSIAMO FARE "show" DEI RECORDS NEL NOSTRO NUOVO OGGETTO DATAFRAME
+# CON SOLO ALCUNE COLONNE, GIA' FILTRATE ECC ECC, E CHE VOLENDO POTREMO
+# ULTERIORMENTE RI-FILTRARE A VALLE, OPPURE METTERE IN JOIN CON ALTRE TABELLE,
+# IL TUTTO, COME DETTO, SENZA INTERFERIRE CON "orders_DF" OVVERO IL NOSTRO
+# DATAFRAME ORIGINALE. LA CALL A "show" DI DEFAULT RESTITUISCE 20 RECORDS,
+# PROVIAMO A RACCOGLIERE PIU' RECORDS
+orders_filered_DF.show(100)
+
+
+# PROVIAMO ORA A RAGGRUPPARE E SOMMARE IL COSTO DELLA SPEDIZIONE "freight"
+# PER NAZIONE. SELEZIONIAMO QUINDI DAL NOSTRO DATAFRAME PRECEDENTE GIA'
+# FILTRATO PER DATA SOLO I CAMPI CHE CI INTERESSANO E EFFETTUIAMO IL
+# GROUPBY E LA SOMMA
+orders_freight_cost_by_nation_DF = orders_filered_DF \
+.select(['shipcountry', 'freight']) \
+.groupby(['shipcountry']) \
+.sum()
+
+orders_freight_cost_by_nation_DF.show()
+
+
+# VEDIAMO CHE LA COLONNA RAGGRUPPATA ASSUME UN NOME STRANO E SCOMODO DA MANEGGIARE
+# IN QUESTO CASI SPESSO E' UTILE UTILIZZARE UN ALIAS
+# ANZI, SPESSO QUESTA E' UNA PRATICA DA ESEGUIRE QUASI AD OGNI SELECT, PERCHE'
+# IN CASO DI JOIN CON ALTRI DATAFRAME FORMATI DA CAMPI CON NOMI UGUALI
+# SI POTREBBE FACILMENTE CADERE IN CONFLITTI DI AMBIGUITA'.
+# CERTAMENTE NULLA DI GRAVE, CI SAREBBE UN'ECCEZIONE CHE SEGNALEREBBE IL
+# PROBLEMA, COMUNQUE QUI DI SEGUITO UN PRIMO MODO CON CUI E' POSSIBILE
+# ASSEGNARE ALIAS ALLE COLONNE
+#
+# NEL COMANDO SUCCESSIVO NOTARE ANCHE CHE ABBIAMO SPEZZATO SU DUE RIGHE
+# L'ELENCO DEI CAMPI OGGETTO DI SELECT (CHE NEGLI ESEMPI PRECEDENTI
+# AVEVAMO CONDENSATO IN UN'UNICA LISTA) E CHE AD UNO SOLO DI QUESTI
+# CAMPI SPEZZATI SU PIU' RIGHE ASSEGNAMO UN ALIAS. QUESTO PERCHE'
+# L'ALTRO CAMPO SARA' OGGETTO DI RAGGRUPPAMENTO E DOVREMO ASSEGNARGLI
+# UN ALIAS ALLA FINE DELLA PIPELINE, COME SI NOTA, OVVERO QUANDO LA "sum"
+# SARA' GIA' STATA PROCESSATA
+#
+# SI NOTI ANCHE CHE NELLA GROUPBY ORA CI STIAMO RIFERENDO AL CAMPO CHE PRIMA
+# SI CHIAMAVA "shipcountry" CHIAMANDOLO GIA' CON IL SUO ALIAS "destination_country"
+# CHE GLI ABBIAMO ASSEGNATO NELLA SEZIONE PRECEDENTE DELLA PIPELINE DI COMANDI
+# ALTRIMENTI, REFERENZIANDOLO COL NOME ORIGINALE, OTTERREMMO UNA ECCEZIONE
+orders_freight_cost_by_nation_DF = orders_filered_DF \
+.select(orders_filered_DF['shipcountry'].alias('destination_country'), \
+		orders_filered_DF['freight']) \
+.groupby(['destination_country']) \
+.sum() \
+.withColumnRenamed("sum(freight)", "tot_freight")
+
+orders_freight_cost_by_nation_DF.show()
+
+
+# POSSIAMO ORA PER ESEMPIO AGGIUNGERE UNA ULTERIORE COLONNA NUMERICA
+# CON VALORE FISSO "1" AL NOSTRO DATAFRAME
+orders_freight_cost_by_nation_01_DF = orders_freight_cost_by_nation_DF \
+.withColumn('just_one', lit(1))
+
+orders_freight_cost_by_nation_01_DF.show()
+
+
+# POSSIAMO AGGIUNGERE UNA ULTERIORE COLONNA STRINGA
+# CON VALORE FISSO "Stringa a caso" AL NOSTRO DATAFRAME
+# ALLO STESSTO TEMPO AGGIUNGO ANCHE UN INCREMENTALE PSEUDO-RANDOM
+orders_freight_cost_by_nation_02_DF = orders_freight_cost_by_nation_01_DF\
+.withColumn('just_stringa', lit("Stringa a caso")) \
+.withColumn("just_incremental", monotonically_increasing_id())
+
+orders_freight_cost_by_nation_02_DF.show()
+
+
+# A QUESTO PUNTO POSSIAMO SPERIMENTARE UNA ULTERIORE VERSIONE DELLA
+# GROUPBY CON FUNZIONI DI AGGREGAZIONE
+orders_freight_cost_by_nation_03_DF = orders_freight_cost_by_nation_02_DF \
+.select(orders_freight_cost_by_nation_02_DF['just_stringa'], \
+		orders_freight_cost_by_nation_02_DF['tot_freight'], \
+		orders_freight_cost_by_nation_02_DF['just_one'], \
+		orders_freight_cost_by_nation_02_DF['just_incremental'], \
+		) \
+.groupby(['just_stringa']) \
+.agg({"tot_freight": "avg", \
+		"just_one": "sum", \
+		"just_incremental": "max"}) \
+.withColumnRenamed("avg(tot_freight)", "avg_freight") \
+.withColumnRenamed("sum(just_one)", "tot_just_one") \
+.withColumnRenamed("max(just_incremental)", "max_just_incremental")
+
+orders_freight_cost_by_nation_03_DF.show()
+
+
+# POSSIAMO FARE UN ORDINAMENTO IN DIVERSI MODI (QUI RIPRENDIAMO
+# IL DATAFRAME "orders_filered_DF" E FACCIAMO SOLO "show")
+orders_filered_DF \
+.orderBy(["shipcountry"], ascending=[1]) \
+.show(100)
+
+
+# STESSA COSA PER PIU' CAMPI CON DIVERSI ORDINAMENTI ASC/DESC
+orders_filered_DF \
+.orderBy(["shipcountry", "shipcity", "freight"], ascending=[1,1,0]) \
+.show(100)
+
+
+# DEFINIAMO ORA UNA UDF (USER DEFINED FUNCTION) MOLTO SEMPLICE
+# CHE CI PERMETTE DI PORTARE UNA STRINGA IN MAIUSCOLO
+# OVVIAMENTE PER FARE CIO' SI POTREBBERO USARE "upper()"
+# MA E' SOLO PER SPIEGARE LE UDF
+# IMPORTANTE: BISOGNA AVERE IMPORTATO LA LIBRERIA "types"
+# NOI ALL'INIZIO L'ABBIAMO GIA' FATTO MA LO RISCRIVO PER CHIAREZZA
+from pyspark.sql.types import *
+
+def porta_in_maiuscolo(input_string):
+	output_string = input_string.upper()
+	
+	return(output_string)
+	
+porta_in_maiuscolo_UDF = udf(porta_in_maiuscolo, StringType())
+
+
+# USIAMO LA UDF PER PORTARE IN MAIUSCOLO ALCUNI CAMPI DEL
+# DATAFRAME "orders_filered_DF"
+
+orders_filered_uppercase_DF = orders_filered_DF \
+.select(orders_filered_DF['orderid'], \
+		orders_filered_DF['customerid'], \
+		orders_filered_DF['shippeddate'], \
+		orders_filered_DF['freight'], \
+		orders_filered_DF['shipvia'], \
+		porta_in_maiuscolo_UDF(orders_filered_DF['shipcity']), \
+		porta_in_maiuscolo_UDF(orders_filered_DF['shipcountry'])) \
+.withColumnRenamed("porta_in_maiuscolo(shipcity)", "shipcity") \
+.withColumnRenamed("porta_in_maiuscolo(shipcountry)", "shipcountry")
+
+orders_filered_uppercase_DF.show()
+
+
+# DEFINIAMO UN'ALTRA UDF CHE CI PERMETTA AD ESEMPIO DI AGGIUNGERE
+# UNA COLONNA AL NOSTRO DATAFRAME COME VALORE DERIVATO DA ALTRE
+# DUE COLONNE NUMERICHE
+def somma_due_colonne(input_number_01, input_number_02):
+	output_number = input_number_01 + input_number_02
+	
+	return(output_number)
+	
+somma_due_colonne_UDF = udf(somma_due_colonne, FloatType())
+
+
+# USIAMO LA UDF PER PORTARE AGGIUNGERE UNA COLONNA DERIVATA AL
+# DATAFRAME "orders_filered_uppercase_DF"
+
+orders_filered_uppercase_somma_DF = orders_filered_uppercase_DF \
+.select(orders_filered_uppercase_DF['orderid'], \
+		orders_filered_uppercase_DF['customerid'], \
+		orders_filered_uppercase_DF['shippeddate'], \
+		orders_filered_uppercase_DF['freight'], \
+		orders_filered_uppercase_DF['shipvia'], \
+		orders_filered_uppercase_DF['shipcity'], \
+		orders_filered_uppercase_DF['shipcountry']) \
+.withColumn("just_somma", somma_due_colonne_UDF(orders_filered_uppercase_DF['freight'], orders_filered_uppercase_DF['shipvia']))
+
+orders_filered_uppercase_somma_DF.show()
+
+
+# FACCIAMO UNA JOIN TRA DUE TABELLE
+# PRIMO METODO, METTIAMO UN PO' DI COMPLESSITA' CON UDF
+orders_filered_uppercase_somma_join_shippers_DF = orders_filered_uppercase_somma_DF \
+.join(shippers_DF, \
+     (orders_filered_uppercase_somma_DF['shipvia'] == shippers_DF['shipperid']), \
+"left_outer",) \
+.select(orders_filered_uppercase_somma_DF['orderid'], \
+		orders_filered_uppercase_somma_DF['customerid'], \
+		orders_filered_uppercase_somma_DF['shippeddate'], \
+		orders_filered_uppercase_somma_DF['freight'], \
+		porta_in_maiuscolo_UDF(shippers_DF['companyname']).alias('shipper'), \
+		shippers_DF['phone'].alias('shipper_phone'), \
+		orders_filered_uppercase_somma_DF['shipcity'], \
+		orders_filered_uppercase_somma_DF['shipcountry'], \
+		orders_filered_uppercase_somma_DF['just_somma'])
+
+orders_filered_uppercase_somma_join_shippers_DF.show()
+
+
+# FACCIAMO UNA JOIN TRA DUE TABELLE
+# SECONDO METODO, METTIAMO UN PO' DI COMPLESSITA' CON ALIAS SUI DF IN INPUT
+
+orders_filered_uppercase_somma_join_shippers_DF = orders_filered_uppercase_somma_DF.alias('a') \
+.join(shippers_DF.alias('b'),col('b.shipperid') == col('a.shipvia')) \
+.select(orders_filered_uppercase_somma_DF['orderid'], \
+		orders_filered_uppercase_somma_DF['customerid'], \
+		orders_filered_uppercase_somma_DF['shippeddate'], \
+		orders_filered_uppercase_somma_DF['freight'], \
+		porta_in_maiuscolo_UDF(shippers_DF['companyname']).alias('shipper'), \
+		shippers_DF['phone'].alias('shipper_phone'), \
+		orders_filered_uppercase_somma_DF['shipcity'], \
+		orders_filered_uppercase_somma_DF['shipcountry'], \
+		orders_filered_uppercase_somma_DF['just_somma'])
+
+orders_filered_uppercase_somma_join_shippers_DF.show(100)
+
+
+# PRIMO ESEMPIO DI DEDUPLICA DEI RECORD
+# IN QUESTO CASO DEDUPLICHIAMO I RECORD IN MODO DA TENERE GLI SHIPPER UNIVOCI
+# E QUINDI AGGIUNGIAMO SOLO QUEL CAMPO AL SUBSET DA DEDUPLICARE
+# OVVIAMENTE IL RISULTATO E' CHE, NON ESSENDO QUESTA UNA GROUP BY ECC ECC,
+# VIENE TENUTO SOLO E SOLTANTO IL PRIMO RECORD DI OGNI SHIPPER CHE VENGA
+# TROVATO NEL NOSTRO DATASET
+orders_filered_uppercase_somma_join_shippers_dropped_DF = \
+orders_filered_uppercase_somma_join_shippers_DF \
+.dropDuplicates(subset = ['shipper'])
+
+orders_filered_uppercase_somma_join_shippers_dropped_DF.show()
+
+
+# SECONDO ESEMPIO DI DEDUPLICA DEI RECORD
+# INDICANDO TUTTI I CAMPI TABELLA NEL SUBSET DA DEDUPLICARE
+# IN QUESTO MODO OTTERREMO SENZ'ALTRO UN ELENCO DI RECORDS
+# UNIVOCI IN TUTTO E PER TUTTO ALL'INTERNO DEL DATASET
+# PREPARIAMO QUINDI UNA TABELLA DI COMODO CON DUE CAMPI
+# CON DUPLICAZIONE RECORD E POI FILTRIAMO SULLA TOTALITA'
+# DEI DUE CAMPI
+orders_filered_uppercase_solodue_DF = orders_filered_uppercase_DF\
+.select(['shipcity', 'shipcountry'])
+
+orders_filered_uppercase_solodue_DF.show(100)
+
+orders_filered_uppercase_solodue_DF.count()
+
+orders_filered_uppercase_solodue_dropped_DF = \
+orders_filered_uppercase_solodue_DF \
+.dropDuplicates(subset = ['shipcity', 'shipcountry'])
+
+orders_filered_uppercase_solodue_dropped_DF.show(100)
+
+orders_filered_uppercase_solodue_dropped_DF.count()
+
+
+# SCRIVIAMO UN DATAFRAME COME FILE CSV SU HDFS
+orders_DF.write.csv('hdfs:///tmp/dump_orders_DF')
+
+# VIENE CREATA UNA DIRECTORY SU HDFS CHE SI CHIAMA COL NOME SPECIFICATO
+# VERIFICHIAMONE I CONTENUTI DAL PROMT DI SISTEMA OPERATIVO
+# COME SI PUO' VEDERE, LA DIRECTORY CONTIENE TANTI FILES QUANTI
+# SONO I REDUCERS CHE NOI ABBIAMO IMPOSTATO A LIVELLO DI PARAMETRI SPARK
+hdfs dfs -ls /tmp/dump_orders_DF
+Found 3 items
+-rw-rw-r--   3 hdfs supergroup          0 2020-03-10 18:38 /tmp/dump_orders_DF/_SUCCESS
+-rw-rw-r--   3 hdfs supergroup      66252 2020-03-10 18:38 /tmp/dump_orders_DF/part-00000-33856ecf-bec6-42a4-961c-41f0d22f5f29-c000.csv
+-rw-rw-r--   3 hdfs supergroup      66011 2020-03-10 18:38 /tmp/dump_orders_DF/part-00001-33856ecf-bec6-42a4-961c-41f0d22f5f29-c000.csv
+
+
+# RIPROVIAMO QUINDI A SCRIVERE IL FILE USANDO IL
+# PARAMETRO "coalesce" OPPURE "repartition"
+# LA DIFFERENZA TRA I DUE E' CHE CAMBIANO LE MODALITA' DI SHUFFLE
+# A LIVELLO DI CLUSTER, QUINDI SU GRANDI MOLI DI DATI 
+# LA SCELTA DOVREBBE ESSERE OCULATA
+orders_DF \
+.coalesce(1) \
+.write.format("com.databricks.spark.csv") \
+.option("header", "true") \
+.save("hdfs:///tmp/dump_orders_coalesce_DF")
+
+# VEDIAMO CHE STAVOLTA IL SALVATAGGIO E' STATO ESEGUITO IN UN SOLO FILE FINALE
+# PERCHE' TUTTI I DATI SONO STATI RIAGGREGATI DAL DRIVER PROGRAM, IL QUALE
+# SI E' INFINE OCCUPATO DI SCRIVERLI SU HDFS
+hdfs dfs -ls /tmp/dump_orders_coalesce_DF
+Found 2 items
+-rw-rw-r--   3 hdfs supergroup          0 2020-03-10 18:48 /tmp/dump_orders_coalesce_DF/_SUCCESS
+-rw-rw-r--   3 hdfs supergroup     132412 2020-03-10 18:48 /tmp/dump_orders_coalesce_DF/part-00000-05de2c34-67c4-4f6f-96f9-ef8a0443bf0d-c000.csv
+
+# PER VISUALIZZARE I CONTENUTI DEL FILE CSV, DAL PROMPT DI
+# SISTEMA OPERATIVO, POSSIAMO USARE "cat"
+hdfs dfs -cat /tmp/dump_orders_coalesce_DF/part-00000-05de2c34-67c4-4f6f-96f9-ef8a0443bf0d-c000.csv
+
+
+# INFINE, LO STESSO ESEMPIO CON "repartition"
+orders_DF \
+.repartition(1) \
+.write.format("com.databricks.spark.csv") \
+.option("header", "true") \
+.save("hdfs:///tmp/dump_orders_repartition_DF")
+
+hdfs dfs -ls /tmp/dump_orders_repartition_DF
+
+Found 2 items
+-rw-rw-r--   3 hdfs supergroup          0 2020-03-10 18:51 /tmp/dump_orders_repartition_DF/_SUCCESS
+-rw-rw-r--   3 hdfs supergroup     132412 2020-03-10 18:51 /tmp/dump_orders_repartition_DF/part-00000-d4ea7922-c8b3-4b2c-bf4f-6f1fefeee71a-c000.csv
+
+hdfs dfs -cat /tmp/dump_orders_repartition_DF/part-00000-d4ea7922-c8b3-4b2c-bf4f-6f1fefeee71a-c000.csv
+
+
+
+
+# SALVIAMO COME TABELLA HIVE FILETYPE PARQUET NON PARTIZIONATA
+# IN MODALITA' "Overwrite". ATTENZIONE: IN QUESTO ESEMPIO
+# LO SCHEMA NAME E' "spark" PERCHE' COSI' AVEVAMO CHIAMATO IL 
+# NOSTRO DATABASE DI TEST ALL'INIZIO! SE NON SI TIENE A MENTE
+# QUESTO, IL NOME POTREBBE ESSERE FUORVIANTE
+orders_DF \
+.write.mode("overwrite") \
+.saveAsTable("spark.sample_orders_nopartition")
+
+# CONTROLLIAMO
+orders_checkrecords_DF = sqlContext.table("spark.sample_orders_nopartition")
+
+orders_checkrecords_DF.count()
+
+
+# SALVIAMO ORA IN APPEND
+orders_DF \
+.write.mode("append") \
+.saveAsTable("spark.sample_orders_nopartition")
+
+
+# CONTROLLIAMO NUOVAMENTE IL NUMERO DI RECORDS E NOTIAMO CHE
+# GIUSTAMENTE E' RADDOPPIATO RISPETTO A PRIMA
+orders_checkrecords_DF.count()
+
+
+# SCRIVIAMO ORA UNA TABELLA IN FORMATO ORC
+# PARTIZIONATA PER "shipvia" CHE NEL NOSTRO CASO E'
+# IL CODICE DELLO SPEDIZIONIERE. ALL'INIZIO USIAMO
+# LA MODALITA' "overwrite" PERCHE' LA TABELLA ANCORA
+# NON ESISTE
+orders_DF \
+.write \
+.mode("overwrite") \
+.partitionBy("shipvia") \
+.format("orc") \
+.saveAsTable("spark.sample_orders_partition_orc")
+
+# CONTROLLIAMO
+orders_checkrecords_partition_orc_DF = sqlContext.table("spark.sample_orders_partition_orc")
+
+orders_checkrecords_partition_orc_DF.count()
+
+
+# DA PROMPT DI SISTEMA OPERATIVO CONTROLLIAMO E VEDIAMO CHE EFFETTIVAMENTE
+# CI SONO 3 PARTIZIONI CHE CONTENGONO FILES ORC
+
+hdfs dfs -ls /user/hive/warehouse/spark.db/sample_orders_partition_orc
+Found 5 items
+-rw-rw-r--   3 hdfs hive          0 2020-03-10 19:13 /user/hive/warehouse/spark.db/sample_orders_partition_orc/_SUCCESS
+drwxrwxr-x   - hdfs hive          0 2020-03-10 19:13 /user/hive/warehouse/spark.db/sample_orders_partition_orc/shipvia=1
+drwxrwxr-x   - hdfs hive          0 2020-03-10 19:13 /user/hive/warehouse/spark.db/sample_orders_partition_orc/shipvia=2
+drwxrwxr-x   - hdfs hive          0 2020-03-10 19:13 /user/hive/warehouse/spark.db/sample_orders_partition_orc/shipvia=3
+drwxrwxr-x   - hdfs hive          0 2020-03-10 19:13 /user/hive/warehouse/spark.db/sample_orders_partition_orc/shipvia=__HIVE_DEFAULT_PARTITION
+
+hdfs dfs -ls /user/hive/warehouse/spark.db/sample_orders_partition_orc/shipvia=1
+Found 2 items
+-rw-rw-r--   3 hdfs hive       9402 2020-03-10 19:13 /user/hive/warehouse/spark.db/sample_orders_partition_orc/shipvia=1/part-00000-76dddaef-2b3e-4717-88a4-2fb4428e62eb.c000.snappy.orc
+-rw-rw-r--   3 hdfs hive       9166 2020-03-10 19:13 /user/hive/warehouse/spark.db/sample_orders_partition_orc/shipvia=1/part-00001-76dddaef-2b3e-4717-88a4-2fb4428e62eb.c000.snappy.orc
+
+
+# PROVIAMO LA STESSA COSA, INFINE, IN FORMATO PARQUET
+orders_DF \
+.write \
+.mode("overwrite") \
+.partitionBy("shipvia") \
+.format("parquet") \
+.saveAsTable("spark.sample_orders_partition_parquet")
+
+hdfs dfs -ls /user/hive/warehouse/spark.db/sample_orders_partition_parquet
+Found 5 items
+-rw-rw-r--   3 hdfs hive          0 2020-03-10 19:20 /user/hive/warehouse/spark.db/sample_orders_partition_parquet/_SUCCESS
+drwxrwxr-x   - hdfs hive          0 2020-03-10 19:20 /user/hive/warehouse/spark.db/sample_orders_partition_parquet/shipvia=1
+drwxrwxr-x   - hdfs hive          0 2020-03-10 19:20 /user/hive/warehouse/spark.db/sample_orders_partition_parquet/shipvia=2
+drwxrwxr-x   - hdfs hive          0 2020-03-10 19:20 /user/hive/warehouse/spark.db/sample_orders_partition_parquet/shipvia=3
+drwxrwxr-x   - hdfs hive          0 2020-03-10 19:20 /user/hive/warehouse/spark.db/sample_orders_partition_parquet/shipvia=__HIVE_DEFAULT_PARTITION__
+
+hdfs dfs -ls /user/hive/warehouse/spark.db/sample_orders_partition_parquet/shipvia=1
+Found 2 items
+-rw-rw-r--   3 hdfs hive      11898 2020-03-10 19:20 /user/hive/warehouse/spark.db/sample_orders_partition_parquet/shipvia=1/part-00000-809837c3-f972-412e-8a72-f726cc65f5c6.c000.snappy.parquet
+-rw-rw-r--   3 hdfs hive      11449 2020-03-10 19:20 /user/hive/warehouse/spark.db/sample_orders_partition_parquet/shipvia=1/part-00001-809837c3-f972-412e-8a72-f726cc65f5c6.c000.snappy.parquet
+
+
+
+
+
+
+########################
+# NOTE VARIE
+########################
+
+- Anche se negli esempi visti non si e' potuto introdurre esempi relativamente
+al check dei NULL, si invita ad approfondire il concetto di "is None" e "is not None"
+ad esempio viene riportata una UDF
+
+## ELIMINA LEADING E TRAILING BLANKS
+def stripBlanks(field_to_be_stripped):
+	if (field_to_be_stripped is None):
+		resultField = ''
+	else:
+		resultField = field_to_be_stripped.strip()
+	return (resultField)
+stpBlanks = udf(stripBlanks, StringType())
+
+
+
+- Alla stessa stregua, molto importante e' la funzionalita' "fillNa()"
+quando si lavora con i Dataframes, laddove ad esempio non possiamo
+permetterci di avere campi nulli perche' provocherebbero problemi
+in fase di elaborazione. Si riporta ad esempio un comando per
+processare due colonne di un Dataframe, a nostra scelta, e sostituire
+in esse eventuali campi "Null" con degli "0"
+
+orders_DF.fillna(0, subset=['shipvia', 'orderid'])
+
+
+
+- Un concetto molto importante da approfondire e' anche l'esecuzione
+di programmi Spark in modalita' "Spark Streaming", dove in pratica
+il nostro programma Python resta in ascolto in "modalita' demone"
+e permette di effettuare azioni live all'arrivo di generici eventi.
+
+Molto utile ad esempio in ambito IOT dove magari diversi Device comunicano
+periodicamente degli Update che vanno immediatamente processati ed
+ingeriti.
+
+Pensare anche a use case ambiziosi, tipo interfacciare il tutto con
+l'infrastruttura Kafka/Kafka Connect in modo da poter essere scalabili
+senza alcun problema
+
+
+
+########################
+# ALLA FINE DELL'ESERCIZIO
+# ENTRIAMO IN HIVE E FACCIAMO UN PO' DI PULIZIA
+########################
+
+drop table categories;
+drop table customers;
+drop table employee_territories;
+drop table employees;
+drop table order_details;
+drop table orders;
+drop table products;
+drop table regions;
+drop table shippers;
+drop table suppliers;
+drop table territories;
+
+
+
+
+
+
